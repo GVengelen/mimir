@@ -764,8 +764,6 @@ func isConsistent(qb *queueBroker) error {
 		querierSet := qb.tenantQuerierAssignments.tenantQuerierIDs[tenantID]
 
 		if tenant.orderIndex != ix {
-			fmt.Println(qb.tenantQuerierAssignments.tenantIDOrder)
-			fmt.Printf("%+v\n", tenant)
 			return fmt.Errorf("invalid tenant's index, expected=%d, got=%d", ix, tenant.orderIndex)
 		}
 
@@ -784,9 +782,6 @@ func isConsistent(qb *queueBroker) error {
 
 	tenantQueueCount := qb.queueTree.rootNode.nodeCount() - 1
 	if tenantQueueCount != tenantCount {
-		//fmt.Printf("tenantIDOrder: %v\n", qb.tenantQuerierAssignments.tenantIDOrder)
-		//fmt.Printf("rootNode children: %v\n", qb.queueTree.rootNode.dequeueAlgorithm.getQueueOrder())
-		fmt.Println("tenant count check: ", tenantQueueCount, tenantCount)
 		return fmt.Errorf("inconsistent number of tenants list and tenant queues")
 	}
 

@@ -6,6 +6,7 @@
 package queue
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -46,11 +47,15 @@ func newQueueBroker(maxTenantQueueSize int, additionalQueueDimensionsEnabled boo
 	}
 
 	// TODO (casie): Maybe set this using a flag, so we can also change how we build queue path accordingly
-	tree := NewTree(
+	tree, err := NewTree(
 		tqas,               // root
 		&roundRobinState{}, // tenants
 		&roundRobinState{}, // query components
 	)
+	// An error building the tree is fatal; we must panic
+	if err != nil {
+		panic(fmt.Sprintf("error creating the tree queue: %v", err))
+	}
 	qb := &queueBroker{
 		tenantQueuesTree:                 NewTreeQueue("root"),
 		queueTree:                        tree,

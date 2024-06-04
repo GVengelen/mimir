@@ -1,14 +1,13 @@
 package queue
 
 import (
-	"fmt"
 	//"fmt"
 	"github.com/stretchr/testify/require"
 	"testing"
 )
 
-// TODO (casie): Write tests for NewTree
-// TODO (casie): Write a test for dequeuing from sss childA, enqueue to new childB, expect to dequeue next from childB
+// TODO (casie): Write a test for dequeuing from tqa childA, enqueue to new childB, expect to dequeue next from childB
+// TODO (casie): Write a test for enqueueFrontByPath()
 
 func newTenantQuerierAssignments() *tenantQuerierAssignments {
 	return &tenantQuerierAssignments{
@@ -17,29 +16,34 @@ func newTenantQuerierAssignments() *tenantQuerierAssignments {
 	}
 }
 
-func Test_NewNode(t *testing.T) {
+func Test_NewTree(t *testing.T) {
 	tests := []struct {
 		name      string
-		rootAlgo  DequeueAlgorithm
+		treeAlgos []DequeueAlgorithm
 		state     *tenantQuerierAssignments
 		expectErr bool
 	}{
 		{
-			name:     "create round-robin node",
-			rootAlgo: &roundRobinState{},
+			name:      "create round-robin tree",
+			treeAlgos: []DequeueAlgorithm{&roundRobinState{}},
 		},
 		{
-			name:     "create shuffle-shard node",
-			rootAlgo: newTenantQuerierAssignments(),
+			name:      "create shuffle-shard tree",
+			treeAlgos: []DequeueAlgorithm{newTenantQuerierAssignments()},
 		},
 		{
-			name:     "create shuffle-shard tree with no tenant-querier map, we should create an empty one",
-			rootAlgo: &tenantQuerierAssignments{},
+			name:      "create shuffle-shard tree with no tenant-querier map, we should create an empty one",
+			treeAlgos: []DequeueAlgorithm{&tenantQuerierAssignments{}},
+		},
+		{
+			name:      "fail to create tree without defined dequeueing algorithm",
+			treeAlgos: []DequeueAlgorithm{nil},
+			expectErr: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewNode("root", 0, tt.rootAlgo)
+			_, err := NewTree(tt.treeAlgos...)
 			if tt.expectErr {
 				require.Error(t, err)
 			} else {
@@ -99,12 +103,11 @@ func Test_EnqueueBackByPath(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tree := NewTree(tt.treeAlgosByDepth...)
-			root := tree.rootNode
+			tree, err := NewTree(tt.treeAlgosByDepth...)
+			require.NoError(t, err)
 
-			var err error
 			for _, childPath := range tt.children {
-				err = root.enqueueBackByPath(tree, childPath, "some-object")
+				err = tree.EnqueueBackByPath(childPath, "some-object")
 			}
 			if tt.expectErr {
 				require.Error(t, err)
@@ -148,22 +151,22 @@ func Test_Dequeue_RootNode(t *testing.T) {
 			case *tenantQuerierAssignments:
 				tt.rootAlgo.(*tenantQuerierAssignments).currentQuerier = &querierID
 			}
-			tree := NewTree(tt.rootAlgo)
-			root := tree.rootNode
+			tree, err := NewTree(tt.rootAlgo)
+			require.NoError(t, err)
 
 			for _, elt := range tt.enqueueToRoot {
-				err := root.enqueueBackByPath(tree, QueuePath{}, elt)
+				err = tree.EnqueueBackByPath(QueuePath{}, elt)
 				require.NoError(t, err)
 			}
 			rootPath := QueuePath{"root"}
 			for _, elt := range tt.enqueueToRoot {
-				path, v := root.dequeue()
+				path, v := tree.Dequeue()
 				require.Equal(t, rootPath, path)
 				require.Equal(t, elt, v)
 
 			}
 
-			path, v := root.dequeue()
+			path, v := tree.Dequeue()
 			require.Equal(t, rootPath, path)
 			require.Nil(t, v)
 
@@ -221,30 +224,30 @@ func Test_RoundRobinDequeue(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tree := NewTree(&roundRobinState{}, &roundRobinState{}, &roundRobinState{})
-			root := tree.rootNode
+			tree, err := NewTree(&roundRobinState{}, &roundRobinState{}, &roundRobinState{})
+			require.NoError(t, err)
 
 			for _, sqo := range tt.selfQueueObjects {
-				err := root.enqueueBackByPath(tree, QueuePath{}, sqo)
+				err = tree.EnqueueBackByPath(QueuePath{}, sqo)
 				require.NoError(t, err)
 			}
 
 			for _, child := range tt.children {
 				for _, obj := range tt.childQueueObjects[child] {
-					_ = root.enqueueBackByPath(tree, QueuePath{child}, obj)
+					_ = tree.EnqueueBackByPath(QueuePath{child}, obj)
 				}
 			}
 
 			for _, grandchild := range tt.grandchildren {
 				gqo := tt.grandchildrenQueueObjects[grandchild]
 				for _, obj := range gqo.objs {
-					err := root.enqueueBackByPath(tree, gqo.path, obj)
+					err = tree.EnqueueBackByPath(gqo.path, obj)
 					require.NoError(t, err)
 				}
 			}
 
 			for _, expected := range tt.expected {
-				_, val := root.dequeue()
+				_, val := tree.Dequeue()
 				v, ok := val.(string)
 				require.True(t, ok)
 				require.Equal(t, expected, v)
@@ -311,12 +314,13 @@ func Test_DequeueOrderAfterEnqueue(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tree := NewTree(tt.treeAlgosByDepth...)
+			tree, err := NewTree(tt.treeAlgosByDepth...)
+			require.NoError(t, err)
 			root := tree.rootNode
 
 			for _, operation := range tt.operationOrder {
 				if operation.kind == enqueue {
-					err := root.enqueueBackByPath(tree, operation.path, operation.obj)
+					err = tree.EnqueueBackByPath(operation.path, operation.obj)
 					require.NoError(t, err)
 				}
 				if operation.kind == dequeue {
@@ -525,19 +529,18 @@ func Test_ShuffleShardDequeue(t *testing.T) {
 				}
 			}
 
-			tree := NewTree(tt.treeAlgosByDepth...)
-			root := tree.rootNode
+			tree, err := NewTree(tt.treeAlgosByDepth...)
+			require.NoError(t, err)
 
 			for _, o := range tt.enqueueObjs {
-				err := root.enqueueBackByPath(tree, o.path, o.obj)
+				err = tree.EnqueueBackByPath(o.path, o.obj)
 				require.NoError(t, err)
 			}
 			// currQuerier at position i is used to dequeue the expected result at position i
 			require.Equal(t, len(tt.currQuerier), len(tt.expected))
 			for i := 0; i < len(tt.expected); i++ {
 				currentQuerier = tt.currQuerier[i]
-				path, v := root.dequeue()
-				fmt.Println(path, v)
+				_, v := tree.Dequeue()
 				require.Equal(t, tt.expected[i], v)
 			}
 		})
@@ -557,13 +560,13 @@ func Test_ChangeShuffleShardState(t *testing.T) {
 		currentQuerier:   nil,
 	}
 
-	tree := NewTree(state, &roundRobinState{}, &roundRobinState{})
-	root := tree.rootNode
+	tree, err := NewTree(state, &roundRobinState{}, &roundRobinState{})
+	require.NoError(t, err)
 
-	err := root.enqueueBackByPath(tree, QueuePath{"tenant-1", "query-component-1"}, "query-1")
-	err = root.enqueueBackByPath(tree, QueuePath{"tenant-2", "query-component-1"}, "query-2")
-	err = root.enqueueBackByPath(tree, QueuePath{"tenant-2", "query-component-1"}, "query-3")
-	err = root.enqueueBackByPath(tree, QueuePath{"tenant-2", "query-component-1"}, "query-4")
+	err = tree.EnqueueBackByPath(QueuePath{"tenant-1", "query-component-1"}, "query-1")
+	err = tree.EnqueueBackByPath(QueuePath{"tenant-2", "query-component-1"}, "query-2")
+	err = tree.EnqueueBackByPath(QueuePath{"tenant-2", "query-component-1"}, "query-3")
+	err = tree.EnqueueBackByPath(QueuePath{"tenant-2", "query-component-1"}, "query-4")
 	require.NoError(t, err)
 
 	querier1 := QuerierID("querier-1")
@@ -572,24 +575,24 @@ func Test_ChangeShuffleShardState(t *testing.T) {
 
 	// set state to querier-2 should dequeue query-2
 	state.currentQuerier = &querier2
-	_, v := root.dequeue()
+	_, v := tree.Dequeue()
 	require.Equal(t, "query-2", v)
 
 	// update state to querier-1 should dequeue query-1
 	state.currentQuerier = &querier1
-	_, v = root.dequeue()
+	_, v = tree.Dequeue()
 	require.Equal(t, "query-1", v)
 
 	// update tqa map to add querier-3 as assigned to tenant-2, then set state to querier-3 should dequeue query-3
 	tqa.tenantQuerierIDs["tenant-2"]["querier-3"] = struct{}{}
 	state.currentQuerier = &querier3
-	_, v = root.dequeue()
+	_, v = tree.Dequeue()
 	require.Equal(t, "query-3", v)
 
 	// during reshuffle, we only ever reassign tenant values, we don't assign an entirely new map value
 	// to tenantQuerierIDs. Reassign tenant-2 to an empty map value , and query-4 should _not_ be dequeued
 	tqa.tenantQuerierIDs["tenant-2"] = map[QuerierID]struct{}{}
-	_, v = root.dequeue()
+	_, v = tree.Dequeue()
 	require.Nil(t, v)
 
 }
