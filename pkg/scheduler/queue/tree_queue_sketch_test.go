@@ -10,9 +10,9 @@ import (
 // TODO (casie): Write tests for NewTree
 // TODO (casie): Write a test for dequeuing from sss childA, enqueue to new childB, expect to dequeue next from childB
 
-func newShuffleShardState() *shuffleShardState {
-	return &shuffleShardState{
-		tenantQuerierMap: make(map[TenantID]map[QuerierID]struct{}),
+func newTenantQuerierAssignments() *tenantQuerierAssignments {
+	return &tenantQuerierAssignments{
+		tenantQuerierIDs: make(map[TenantID]map[QuerierID]struct{}),
 		tenantNodes:      make(map[string][]*Node),
 	}
 }
@@ -21,7 +21,7 @@ func Test_NewNode(t *testing.T) {
 	tests := []struct {
 		name      string
 		rootAlgo  DequeueAlgorithm
-		state     *shuffleShardState
+		state     *tenantQuerierAssignments
 		expectErr bool
 	}{
 		{
@@ -30,11 +30,11 @@ func Test_NewNode(t *testing.T) {
 		},
 		{
 			name:     "create shuffle-shard node",
-			rootAlgo: newShuffleShardState(),
+			rootAlgo: newTenantQuerierAssignments(),
 		},
 		{
 			name:     "create shuffle-shard tree with no tenant-querier map, we should create an empty one",
-			rootAlgo: &shuffleShardState{},
+			rootAlgo: &tenantQuerierAssignments{},
 		},
 	}
 	for _, tt := range tests {
@@ -65,18 +65,18 @@ func Test_EnqueueBackByPath(t *testing.T) {
 		},
 		{
 			name:             "enqueue shuffle-shard node to round-robin node",
-			treeAlgosByDepth: []DequeueAlgorithm{&roundRobinState{}, &shuffleShardState{tenantQuerierMap: map[TenantID]map[QuerierID]struct{}{}}},
+			treeAlgosByDepth: []DequeueAlgorithm{&roundRobinState{}, &tenantQuerierAssignments{tenantQuerierIDs: map[TenantID]map[QuerierID]struct{}{}}},
 			children:         []QueuePath{{"shuffle-shard-child-1"}},
 		},
 		{
 			name:             "enqueue shuffle-shard node with no tenant-querier map to round-robin node, we should create an empty one",
-			treeAlgosByDepth: []DequeueAlgorithm{&roundRobinState{}, &shuffleShardState{}},
+			treeAlgosByDepth: []DequeueAlgorithm{&roundRobinState{}, &tenantQuerierAssignments{}},
 			children:         []QueuePath{{"shuffle-shard-child-1"}},
 		},
 		{
 			name: "enqueue round-robin node to shuffle-shard node",
 			treeAlgosByDepth: []DequeueAlgorithm{
-				newShuffleShardState(),
+				newTenantQuerierAssignments(),
 				&roundRobinState{},
 			},
 			children: []QueuePath{{"round-robin-child-1"}},
@@ -84,9 +84,9 @@ func Test_EnqueueBackByPath(t *testing.T) {
 		{
 			name: "create tree with multiple shuffle-shard depths",
 			treeAlgosByDepth: []DequeueAlgorithm{
-				newShuffleShardState(),
+				newTenantQuerierAssignments(),
 				&roundRobinState{},
-				newShuffleShardState(),
+				newTenantQuerierAssignments(),
 			},
 			children: []QueuePath{{"child"}, {"grandchild"}},
 		},
@@ -127,7 +127,7 @@ func Test_Dequeue_RootNode(t *testing.T) {
 		},
 		{
 			name:     "dequeue from empty shuffle-shard root node",
-			rootAlgo: newShuffleShardState(),
+			rootAlgo: newTenantQuerierAssignments(),
 		},
 		{
 			name:          "dequeue from non-empty round-robin root node",
@@ -136,7 +136,7 @@ func Test_Dequeue_RootNode(t *testing.T) {
 		},
 		{
 			name:          "dequeue from non-empty shuffle-shard root node",
-			rootAlgo:      newShuffleShardState(),
+			rootAlgo:      newTenantQuerierAssignments(),
 			enqueueToRoot: []any{"something-else-in-root"},
 		},
 	}
@@ -145,8 +145,8 @@ func Test_Dequeue_RootNode(t *testing.T) {
 			// TODO (casie): ugly
 			querierID := QuerierID("placeholder")
 			switch tt.rootAlgo.(type) {
-			case *shuffleShardState:
-				tt.rootAlgo.(*shuffleShardState).currentQuerier = &querierID
+			case *tenantQuerierAssignments:
+				tt.rootAlgo.(*tenantQuerierAssignments).currentQuerier = &querierID
 			}
 			tree := NewTree(tt.rootAlgo)
 			root := tree.rootNode
@@ -286,13 +286,13 @@ func Test_DequeueOrderAfterEnqueue(t *testing.T) {
 		{
 			name: "should dequeue from new (next-in-queue) shuffle-shard child immediately after it is added",
 			treeAlgosByDepth: []DequeueAlgorithm{
-				&shuffleShardState{
-					tenantQuerierMap: map[TenantID]map[QuerierID]struct{}{},
+				&tenantQuerierAssignments{
+					tenantQuerierIDs: map[TenantID]map[QuerierID]struct{}{},
 					tenantNodes:      map[string][]*Node{},
 					currentQuerier:   &placeholderQuerier,
 				},
-				&shuffleShardState{
-					tenantQuerierMap: map[TenantID]map[QuerierID]struct{}{},
+				&tenantQuerierAssignments{
+					tenantQuerierIDs: map[TenantID]map[QuerierID]struct{}{},
 					tenantNodes:      map[string][]*Node{},
 					currentQuerier:   &placeholderQuerier,
 				},
@@ -338,7 +338,7 @@ func Test_ShuffleShardDequeue(t *testing.T) {
 	tests := []struct {
 		name             string
 		treeAlgosByDepth []DequeueAlgorithm
-		state            *shuffleShardState
+		state            *tenantQuerierAssignments
 		currQuerier      []QuerierID
 		enqueueObjs      []enqueueObj
 		expected         []any
@@ -348,11 +348,11 @@ func Test_ShuffleShardDequeue(t *testing.T) {
 			name: "happy path - tenant found in tenant-querier map under first child",
 			treeAlgosByDepth: []DequeueAlgorithm{
 				&roundRobinState{},
-				newShuffleShardState(),
+				newTenantQuerierAssignments(),
 				&roundRobinState{},
 			},
-			state: &shuffleShardState{
-				tenantQuerierMap: map[TenantID]map[QuerierID]struct{}{"tenant-1": {"querier-1": {}}},
+			state: &tenantQuerierAssignments{
+				tenantQuerierIDs: map[TenantID]map[QuerierID]struct{}{"tenant-1": {"querier-1": {}}},
 				tenantNodes:      map[string][]*Node{},
 			},
 			currQuerier: []QuerierID{"querier-1"},
@@ -365,11 +365,11 @@ func Test_ShuffleShardDequeue(t *testing.T) {
 			name: "tenant exists, but not for querier",
 			treeAlgosByDepth: []DequeueAlgorithm{
 				&roundRobinState{},
-				newShuffleShardState(),
+				newTenantQuerierAssignments(),
 				&roundRobinState{},
 			},
-			state: &shuffleShardState{
-				tenantQuerierMap: map[TenantID]map[QuerierID]struct{}{"tenant-1": {"querier-2": {}}},
+			state: &tenantQuerierAssignments{
+				tenantQuerierIDs: map[TenantID]map[QuerierID]struct{}{"tenant-1": {"querier-2": {}}},
 				tenantNodes:      map[string][]*Node{},
 			},
 			currQuerier: []QuerierID{"querier-1"},
@@ -382,11 +382,11 @@ func Test_ShuffleShardDequeue(t *testing.T) {
 			name: "1 of 3 tenants exist for querier",
 			treeAlgosByDepth: []DequeueAlgorithm{
 				&roundRobinState{},
-				newShuffleShardState(),
+				newTenantQuerierAssignments(),
 				&roundRobinState{},
 			},
-			state: &shuffleShardState{
-				tenantQuerierMap: map[TenantID]map[QuerierID]struct{}{"tenant-1": {"querier-2": {}}, "tenant-2": {"querier-2": {}}, "tenant-3": {"querier-1": {}}},
+			state: &tenantQuerierAssignments{
+				tenantQuerierIDs: map[TenantID]map[QuerierID]struct{}{"tenant-1": {"querier-2": {}}, "tenant-2": {"querier-2": {}}, "tenant-3": {"querier-1": {}}},
 			},
 			currQuerier: []QuerierID{"querier-1", "querier-1"},
 			enqueueObjs: []enqueueObj{
@@ -400,11 +400,11 @@ func Test_ShuffleShardDequeue(t *testing.T) {
 			name: "tenant exists for querier on next parent node",
 			treeAlgosByDepth: []DequeueAlgorithm{
 				&roundRobinState{},
-				newShuffleShardState(),
+				newTenantQuerierAssignments(),
 				&roundRobinState{},
 			},
-			state: &shuffleShardState{
-				tenantQuerierMap: map[TenantID]map[QuerierID]struct{}{"tenant-1": {"querier-2": {}}, "tenant-2": {"querier-2": {}}, "tenant-3": {"querier-1": {}}},
+			state: &tenantQuerierAssignments{
+				tenantQuerierIDs: map[TenantID]map[QuerierID]struct{}{"tenant-1": {"querier-2": {}}, "tenant-2": {"querier-2": {}}, "tenant-3": {"querier-1": {}}},
 			},
 			currQuerier: []QuerierID{"querier-1", "querier-1", "querier-1"},
 			enqueueObjs: []enqueueObj{
@@ -419,11 +419,11 @@ func Test_ShuffleShardDequeue(t *testing.T) {
 			name: "2 of 3 tenants exist for querier",
 			treeAlgosByDepth: []DequeueAlgorithm{
 				&roundRobinState{},
-				newShuffleShardState(),
+				newTenantQuerierAssignments(),
 				&roundRobinState{},
 			},
-			state: &shuffleShardState{
-				tenantQuerierMap: map[TenantID]map[QuerierID]struct{}{"tenant-1": {"querier-1": {}}, "tenant-2": {"querier-2": {}}, "tenant-3": {"querier-1": {}}},
+			state: &tenantQuerierAssignments{
+				tenantQuerierIDs: map[TenantID]map[QuerierID]struct{}{"tenant-1": {"querier-1": {}}, "tenant-2": {"querier-2": {}}, "tenant-3": {"querier-1": {}}},
 				tenantNodes:      map[string][]*Node{},
 			},
 			currQuerier: []QuerierID{"querier-1", "querier-1", "querier-1"},
@@ -437,12 +437,12 @@ func Test_ShuffleShardDequeue(t *testing.T) {
 		{
 			name: "root node is shuffle-shard node",
 			treeAlgosByDepth: []DequeueAlgorithm{
-				&shuffleShardState{tenantQuerierMap: map[TenantID]map[QuerierID]struct{}{}},
+				&tenantQuerierAssignments{tenantQuerierIDs: map[TenantID]map[QuerierID]struct{}{}},
 				&roundRobinState{},
 				&roundRobinState{},
 			},
-			state: &shuffleShardState{
-				tenantQuerierMap: map[TenantID]map[QuerierID]struct{}{"tenant-1": {"querier-1": {}}, "tenant-2": {}},
+			state: &tenantQuerierAssignments{
+				tenantQuerierIDs: map[TenantID]map[QuerierID]struct{}{"tenant-1": {"querier-1": {}}, "tenant-2": {}},
 				tenantNodes:      map[string][]*Node{},
 			},
 			currQuerier: []QuerierID{"querier-1", "querier-1", "querier-1"},
@@ -456,12 +456,12 @@ func Test_ShuffleShardDequeue(t *testing.T) {
 		{
 			name: "dequeueing for one querier returns nil, but does return for a different querier",
 			treeAlgosByDepth: []DequeueAlgorithm{
-				&shuffleShardState{tenantQuerierMap: map[TenantID]map[QuerierID]struct{}{}},
+				&tenantQuerierAssignments{tenantQuerierIDs: map[TenantID]map[QuerierID]struct{}{}},
 				&roundRobinState{},
 				&roundRobinState{},
 			},
-			state: &shuffleShardState{
-				tenantQuerierMap: map[TenantID]map[QuerierID]struct{}{"tenant-1": {"querier-1": {}}},
+			state: &tenantQuerierAssignments{
+				tenantQuerierIDs: map[TenantID]map[QuerierID]struct{}{"tenant-1": {"querier-1": {}}},
 				tenantNodes:      map[string][]*Node{},
 			},
 			currQuerier: []QuerierID{"querier-2", "querier-1"},
@@ -473,12 +473,12 @@ func Test_ShuffleShardDequeue(t *testing.T) {
 		{
 			name: "no querier set in state",
 			treeAlgosByDepth: []DequeueAlgorithm{
-				&shuffleShardState{tenantQuerierMap: map[TenantID]map[QuerierID]struct{}{}},
-				&shuffleShardState{tenantQuerierMap: map[TenantID]map[QuerierID]struct{}{}},
+				&tenantQuerierAssignments{tenantQuerierIDs: map[TenantID]map[QuerierID]struct{}{}},
+				&tenantQuerierAssignments{tenantQuerierIDs: map[TenantID]map[QuerierID]struct{}{}},
 				&roundRobinState{},
 			},
-			state: &shuffleShardState{
-				tenantQuerierMap: map[TenantID]map[QuerierID]struct{}{"tenant-1": {"querier-1": {}}},
+			state: &tenantQuerierAssignments{
+				tenantQuerierIDs: map[TenantID]map[QuerierID]struct{}{"tenant-1": {"querier-1": {}}},
 				tenantNodes:      map[string][]*Node{},
 			},
 			currQuerier: []QuerierID{""},
@@ -491,12 +491,12 @@ func Test_ShuffleShardDequeue(t *testing.T) {
 			// TODO (casie): also dequeues if the tenant _is not_ in the tenant querier map; is this expected? (probably)
 			name: "dequeue from a tenant with a nil tenant-querier map",
 			treeAlgosByDepth: []DequeueAlgorithm{
-				&shuffleShardState{tenantQuerierMap: map[TenantID]map[QuerierID]struct{}{}},
+				&tenantQuerierAssignments{tenantQuerierIDs: map[TenantID]map[QuerierID]struct{}{}},
 				&roundRobinState{},
 				&roundRobinState{},
 			},
-			state: &shuffleShardState{
-				tenantQuerierMap: map[TenantID]map[QuerierID]struct{}{"tenant-1": {"querier-1": {}}, "tenant-2": nil},
+			state: &tenantQuerierAssignments{
+				tenantQuerierIDs: map[TenantID]map[QuerierID]struct{}{"tenant-1": {"querier-1": {}}, "tenant-2": nil},
 				tenantNodes:      map[string][]*Node{},
 			},
 			currQuerier: []QuerierID{"querier-1", "querier-1", "querier-1"},
@@ -518,10 +518,10 @@ func Test_ShuffleShardDequeue(t *testing.T) {
 			// update the state's currentQuerier.
 			for i, da := range tt.treeAlgosByDepth {
 				switch da.(type) {
-				case *shuffleShardState:
-					sss := tt.treeAlgosByDepth[i].(*shuffleShardState)
-					sss.tenantQuerierMap = tt.state.tenantQuerierMap
-					sss.currentQuerier = tt.state.currentQuerier
+				case *tenantQuerierAssignments:
+					tqas := tt.treeAlgosByDepth[i].(*tenantQuerierAssignments)
+					tqas.tenantQuerierIDs = tt.state.tenantQuerierIDs
+					tqas.currentQuerier = tt.state.currentQuerier
 				}
 			}
 
@@ -552,8 +552,8 @@ func Test_ChangeShuffleShardState(t *testing.T) {
 		tenantQuerierIDs: map[TenantID]map[QuerierID]struct{}{"tenant-1": {"querier-1": {}}, "tenant-2": {"querier-2": {}}},
 	}
 
-	state := &shuffleShardState{
-		tenantQuerierMap: tqa.tenantQuerierIDs,
+	state := &tenantQuerierAssignments{
+		tenantQuerierIDs: tqa.tenantQuerierIDs,
 		currentQuerier:   nil,
 	}
 

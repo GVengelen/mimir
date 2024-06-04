@@ -57,21 +57,18 @@ func NewNode(name string, depth int, da DequeueAlgorithm) (*Node, error) {
 		return nil, fmt.Errorf("cannot create a node without a defined dequeueing algorithm")
 	}
 	switch da.(type) {
-	case *shuffleShardState:
-		sss := da.(*shuffleShardState)
-		sss.sharedQueuePosition = localQueueIndex - 1
-		if sss.tenantNodes == nil {
-			sss.tenantNodes = map[string][]*Node{}
-		}
-		if sss.tenantQuerierMap == nil {
-			sss.tenantQuerierMap = map[TenantID]map[QuerierID]struct{}{}
+	case *tenantQuerierAssignments:
+		tqa := da.(*tenantQuerierAssignments)
+		tqa.tenantOrderIndex = localQueueIndex - 1
+		if tqa.tenantNodes == nil {
+			tqa.tenantNodes = map[string][]*Node{}
 		}
 	}
 	return &Node{
-		name:          name,
-		localQueue:    list.New(),
-		queuePosition: localQueueIndex - 1, // start from -2 so that on first dequeue, localQueueIndex is dequeued from
-		//queueOrder:       make([]string, 0),
+		name:             name,
+		localQueue:       list.New(),
+		queuePosition:    localQueueIndex - 1, // start from -2 so that on first dequeue, localQueueIndex is dequeued from
+		queueOrder:       make([]string, 0),
 		queueMap:         make(map[string]*Node, 1),
 		depth:            depth,
 		dequeueAlgorithm: da,
@@ -132,7 +129,7 @@ func (n *Node) dequeue() (QueuePath, any) {
 	var dequeueNode *Node
 	// continue until we've found a value or checked all nodes that need checking
 	for v == nil && !checkedAllNodes {
-		dequeueNode, checkedAllNodes = n.dequeueAlgorithm.dequeueOps().getNode(n)
+		dequeueNode, checkedAllNodes = n.dequeueAlgorithm.dequeueGetNode(n)
 		var deletedNode bool
 		// dequeueing from local queue
 		if dequeueNode == n {
@@ -159,7 +156,7 @@ func (n *Node) dequeue() (QueuePath, any) {
 				deletedNode = n.dequeueAlgorithm.deleteChildNode(n, dequeueNode)
 			}
 		}
-		n.dequeueAlgorithm.dequeueOps().updateState(n, v, deletedNode)
+		n.dequeueAlgorithm.dequeueUpdateState(n, v, deletedNode)
 	}
 	return append(path, childPath...), v
 }
