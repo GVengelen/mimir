@@ -14,14 +14,17 @@ import (
 
 	"github.com/go-kit/log"
 	"github.com/grafana/dskit/user"
-	"github.com/prometheus/prometheus/prompb"
-	"github.com/prometheus/prometheus/storage/remote"
-	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/collector/pdata/pmetric/pmetricotlp"
-
 	"github.com/grafana/mimir/pkg/mimirpb"
 	"github.com/grafana/mimir/pkg/util/test"
 	"github.com/grafana/mimir/pkg/util/validation"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/prometheus/prompb"
+	"github.com/prometheus/prometheus/storage/remote"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/collector/pdata/pmetric"
+	"go.opentelemetry.io/collector/pdata/pmetric/pmetricotlp"
 )
 
 func BenchmarkOTLPHandler(b *testing.B) {
@@ -163,3 +166,97 @@ func (r *reusableReader) Reset() {
 }
 
 var _ io.ReadCloser = &reusableReader{}
+
+func TestOtlpToTimeseriesWithBlessingAttributes(t *testing.T) {
+	tenantID := "testTenant"
+	discardedDueToOtelParseError := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "discarded_due_to_otel_parse_error",
+		Help: "Number of metrics discarded due to OTLP parse errors.",
+	}, []string{tenantID, "group"})
+
+	// Helper function to create a pmetric.Metrics object
+	createMetrics := func() pmetric.Metrics {
+		md := pmetric.NewMetrics()
+		rm := md.ResourceMetrics().AppendEmpty()
+		rm.Resource().Attributes().PutStr("attr2", "value2")
+		il := rm.ScopeMetrics().AppendEmpty()
+		m := il.Metrics().AppendEmpty()
+		m.SetName("test_metric")
+		dp := m.SetEmptyGauge().DataPoints().AppendEmpty()
+		dp.SetIntValue(123)
+		dp.SetTimestamp(pcommon.NewTimestampFromTime(time.Now()))
+		return md
+	}
+	testCases := []struct {
+		name                        string
+		expectedLabels              []mimirpb.LabelAdapter
+		otelMetricsToTimeseriesFunc func(_ string, _ bool, _ []string, _ *prometheus.CounterVec, _ log.Logger, _ pmetric.Metrics) ([]mimirpb.PreallocTimeseries, error)
+		promoteResourceAttributes   []string
+	}{
+		{
+			name: "Successful conversion without blessing attributes new",
+			expectedLabels: []mimirpb.LabelAdapter{
+				{
+					Name:  "__name__",
+					Value: "test_metric",
+				},
+			},
+			otelMetricsToTimeseriesFunc: otelMetricsToTimeseries,
+			promoteResourceAttributes:   []string{},
+		},
+		{
+			name: "Successful conversion with blessing attributes new",
+			expectedLabels: []mimirpb.LabelAdapter{
+				{
+					Name:  "__name__",
+					Value: "test_metric",
+				},
+				{
+					Name:  "attr2",
+					Value: "value2",
+				},
+			},
+			otelMetricsToTimeseriesFunc: otelMetricsToTimeseries,
+			promoteResourceAttributes:   []string{"attr1", "attr2"},
+		},
+		{
+			name: "Successful conversion without blessing attributes old",
+			expectedLabels: []mimirpb.LabelAdapter{
+				{
+					Name:  "__name__",
+					Value: "test_metric",
+				},
+			},
+			otelMetricsToTimeseriesFunc: otelMetricsToTimeseriesOld,
+			promoteResourceAttributes:   []string{},
+		},
+		{
+			name: "Successful conversion with blessing attributes old",
+			expectedLabels: []mimirpb.LabelAdapter{
+				{
+					Name:  "__name__",
+					Value: "test_metric",
+				},
+				{
+					Name:  "attr2",
+					Value: "value2",
+				},
+			},
+			otelMetricsToTimeseriesFunc: otelMetricsToTimeseriesOld,
+			promoteResourceAttributes:   []string{"attr1", "attr2"},
+		},
+	}
+
+	md := createMetrics()
+	for _, ts := range testCases {
+		t.Run(ts.name, func(t *testing.T) {
+			mimirTS, err := ts.otelMetricsToTimeseriesFunc(tenantID, true, ts.promoteResourceAttributes, discardedDueToOtelParseError, log.NewNopLogger(), md)
+			assert.NoError(t, err)
+			assert.Equal(t, 1, len(mimirTS))
+			assert.Equal(t, len(ts.expectedLabels), len(mimirTS[0].Labels))
+			for i, l := range ts.expectedLabels {
+				assert.Equal(t, 0, l.Compare(mimirTS[0].Labels[i]))
+			}
+		})
+	}
+}
