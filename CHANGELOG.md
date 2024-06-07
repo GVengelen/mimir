@@ -13,7 +13,7 @@
   * Query blocking can no longer be circumvented with an equivalent query in a different format; see [Configure queries to block](https://grafana.com/docs/mimir/latest/configure/configure-blocked-queries/)
 * [CHANGE] Query-frontend: stop using `-validation.create-grace-period` to clamp how far into the future a query can span.
 * [CHANGE] Clamp [`GOMAXPROCS`](https://pkg.go.dev/runtime#GOMAXPROCS) to [`runtime.NumCPU`](https://pkg.go.dev/runtime#NumCPU). #8201
-* [CHANGE] Anonymous usage statistics tracking: add CPU usage percentage tracking. #8282
+* [CHANGE] Anonymous usage statistics tracking: replace available CPU cores with CPU usage percentage. #8282
 * [CHANGE] Added new metric `cortex_compactor_disk_out_of_space_errors_total` which counts how many times a compaction failed due to the compactor being out of disk. #8237
 * [CHANGE] Anonymous usage statistics tracking: report active series in addition to in-memory series. #8279
 * [FEATURE] Continuous-test: now runable as a module with `mimir -target=continuous-test`. #7747
