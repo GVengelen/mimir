@@ -121,6 +121,7 @@ type RequestQueue struct {
 	// settings
 	maxOutstandingPerTenant          int
 	additionalQueueDimensionsEnabled bool
+	prioritizeQueryComponents        bool
 	forgetDelay                      time.Duration
 
 	// metrics for reporting
@@ -177,6 +178,7 @@ func NewRequestQueue(
 	log log.Logger,
 	maxOutstandingPerTenant int,
 	additionalQueueDimensionsEnabled bool,
+	prioritizeQueryComponents bool,
 	forgetDelay time.Duration,
 	queueLength *prometheus.GaugeVec,
 	discardedRequests *prometheus.CounterVec,
@@ -193,6 +195,7 @@ func NewRequestQueue(
 		log:                              log,
 		maxOutstandingPerTenant:          maxOutstandingPerTenant,
 		additionalQueueDimensionsEnabled: additionalQueueDimensionsEnabled,
+		prioritizeQueryComponents:        prioritizeQueryComponents,
 		forgetDelay:                      forgetDelay,
 
 		// metrics for reporting
@@ -214,7 +217,7 @@ func NewRequestQueue(
 		waitingQuerierConnsToDispatch: list.New(),
 
 		QueryComponentUtilization: queryComponentCapacity,
-		queueBroker:               newQueueBroker(maxOutstandingPerTenant, additionalQueueDimensionsEnabled, forgetDelay),
+		queueBroker:               newQueueBroker(maxOutstandingPerTenant, additionalQueueDimensionsEnabled, prioritizeQueryComponents, forgetDelay),
 	}
 
 	q.Service = services.NewTimerService(forgetCheckPeriod, q.starting, q.forgetDisconnectedQueriers, q.stop).WithName("request queue")
