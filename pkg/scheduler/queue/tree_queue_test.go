@@ -38,7 +38,7 @@ func Test_NewTree(t *testing.T) {
 			treeAlgos: []DequeueAlgorithm{&tenantQuerierAssignments{}},
 		},
 		{
-			name:      "fail to create tree without defined dequeueing algorithm",
+			name:      "fail to create tree without defined dequeuing algorithm",
 			treeAlgos: []DequeueAlgorithm{nil},
 			expectErr: true,
 		},
@@ -512,7 +512,7 @@ func Test_TenantQuerierAssignmentsDequeue(t *testing.T) {
 			expected: []any{"query-2", "query-3", nil},
 		},
 		{
-			name: "dequeueing for one querier returns nil, but does return for a different querier",
+			name: "dequeuing for one querier returns nil, but does return for a different querier",
 			treeAlgosByDepth: []DequeueAlgorithm{
 				&tenantQuerierAssignments{tenantQuerierIDs: map[TenantID]map[QuerierID]struct{}{}},
 				&roundRobinState{},

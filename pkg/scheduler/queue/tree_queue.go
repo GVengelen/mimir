@@ -33,7 +33,7 @@ type TreeQueue struct {
 
 func NewTree(dequeueAlgorithms ...DequeueAlgorithm) (*TreeQueue, error) {
 	if len(dequeueAlgorithms) == 0 {
-		return nil, fmt.Errorf("cannot create a tree without defined dequeueing algorithms")
+		return nil, fmt.Errorf("cannot create a tree without defined DequeueAlgorithm")
 	}
 	root, err := newNode("root", 0, dequeueAlgorithms[0])
 	if err != nil {
@@ -86,7 +86,7 @@ func (t *TreeQueue) EnqueueBackByPath(path QueuePath, v any) error {
 // fails to complete operations on the dequeued item, but failure is not yet final, and the
 // operations should be retried by a subsequent queue consumer. A concrete example is when
 // a queue consumer fails or disconnects for unrelated reasons while we are in the process
-// of dequeueing a request for it.
+// of dequeuing a request for it.
 //
 // path must be relative to the root node; providing a QueuePath beginning with "root"
 // will create a child node of root which is also named "root."
@@ -107,7 +107,7 @@ type Node struct {
 	name             string
 	localQueue       *list.List
 	queuePosition    int      // next index in queueOrder to dequeue from
-	queueOrder       []string // order for dequeueing from self/children
+	queueOrder       []string // order for dequeuing from self/children
 	queueMap         map[string]*Node
 	depth            int
 	dequeueAlgorithm DequeueAlgorithm
@@ -116,7 +116,7 @@ type Node struct {
 
 func newNode(name string, depth int, da DequeueAlgorithm) (*Node, error) {
 	if da == nil {
-		return nil, fmt.Errorf("cannot create a node without a defined dequeueing algorithm")
+		return nil, fmt.Errorf("cannot create a node without a defined DequeueAlgorithm")
 	}
 	switch da.(type) {
 	case *tenantQuerierAssignments:
@@ -140,7 +140,7 @@ func newNode(name string, depth int, da DequeueAlgorithm) (*Node, error) {
 func (n *Node) IsEmpty() bool {
 	// avoid recursion to make this a cheap operation
 	//
-	// Because we dereference empty child nodes during dequeueing,
+	// Because we dereference empty child nodes during dequeuing,
 	// we assume that emptiness means there are no child nodes
 	// and nothing in this tree node's local queue.
 	//
@@ -201,7 +201,7 @@ func (n *Node) dequeue() (QueuePath, any) {
 	for v == nil && !checkedAllNodes {
 		dequeueNode, checkedAllNodes = n.dequeueAlgorithm.dequeueGetNode(n)
 		var deletedNode bool
-		// dequeueing from local queue
+		// dequeuing from local queue
 		if dequeueNode == n {
 			if n.localQueue.Len() > 0 {
 				// dequeueNode is self, local queue non-empty
@@ -218,7 +218,7 @@ func (n *Node) dequeue() (QueuePath, any) {
 		} else {
 			// dequeue from a child
 			childPath, v = dequeueNode.dequeue()
-			// if the dequeue node is empty _after_ dequeueing, delete it from children
+			// if the dequeue node is empty _after_ dequeuing, delete it from children
 			if dequeueNode.IsEmpty() {
 				// removing an element sets our position one step forward;
 				// tell state to reset it to original queuePosition

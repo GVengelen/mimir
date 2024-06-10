@@ -54,7 +54,7 @@ func (s querierIDSlice) Search(x QuerierID) int {
 }
 
 // tenantQuerierAssignments implements DequeueAlgorithm. In the context of a TreeQueue, it maintains a mapping of
-// tenants to queriers in order to support dequeueing from an appropriate tenant if shuffle-sharding is enabled.
+// tenants to queriers in order to support dequeuing from an appropriate tenant if shuffle-sharding is enabled.
 type tenantQuerierAssignments struct {
 	// a tenant has many queriers
 	// a tenant has *all* queriers if:

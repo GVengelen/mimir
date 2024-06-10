@@ -2,7 +2,7 @@
 
 package queue
 
-// DequeueAlgorithm represents the set of operations specific to different approaches to dequeueing. It is applied
+// DequeueAlgorithm represents the set of operations specific to different approaches to dequeuing. It is applied
 // at the layer-level -- every Node at the same depth in a TreeQueue shares the same DequeueAlgorithm, including state
 // that may be stored in a struct that implements DequeueAlgorithm.
 type DequeueAlgorithm interface {
