@@ -311,7 +311,7 @@ func TestQueuesOnTerminatingQuerier(t *testing.T) {
 
 	// After disconnecting querier-2, it's expected to own no queue.
 	qb.tenantQuerierAssignments.removeQuerier("querier-2")
-	req, tenant, _, _ = qb.dequeueRequestForQuerier(qTwolastTenantIndex, "querier-2")
+	req, tenant, _, err = qb.dequeueRequestForQuerier(qTwolastTenantIndex, "querier-2")
 	assert.Nil(t, req)
 	assert.Nil(t, tenant)
 	assert.Equal(t, ErrQuerierShuttingDown, err)
