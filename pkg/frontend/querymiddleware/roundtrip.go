@@ -36,6 +36,7 @@ const (
 	cardinalityActiveSeriesPathSuffix                 = "/api/v1/cardinality/active_series"
 	cardinalityActiveNativeHistogramMetricsPathSuffix = "/api/v1/cardinality/active_native_histogram_metrics"
 	labelNamesPathSuffix                              = "/api/v1/labels"
+	remoteReadPathSuffix                              = "/api/v1/read"
 
 	// DefaultDeprecatedAlignQueriesWithStep is the default value for the deprecated querier frontend config DeprecatedAlignQueriesWithStep
 	// which has been moved to a per-tenant limit; TODO remove in Mimir 2.14
@@ -47,6 +48,7 @@ const (
 	queryTypeLabels                       = "label_names_and_values"
 	queryTypeActiveSeries                 = "active_series"
 	queryTypeActiveNativeHistogramMetrics = "active_native_histogram_metrics"
+	queryTypeRemoteRead                   = "remote_read"
 	queryTypeOther                        = "other"
 )
 
@@ -322,6 +324,9 @@ func newQueryTripperware(
 	return func(next http.RoundTripper) http.RoundTripper {
 		queryrange := newLimitedParallelismRoundTripper(next, codec, limits, queryRangeMiddleware...)
 		instant := newLimitedParallelismRoundTripper(next, codec, limits, queryInstantMiddleware...)
+		// Note remote read needs to enforce query limits, but it doesn't have HTTP query parameters
+		// so already the newQueryDetailsStartEndRoundTripper bellow doesn't apply.
+		remoteRead := NewRemoteReadRoundTripper(next, limits)
 
 		// Wrap next for cardinality, labels queries and all other queries.
 		// That attempts to parse "start" and "end" from the HTTP request and set them in the request's QueryDetails.
@@ -357,6 +362,8 @@ func newQueryTripperware(
 				return activeNativeHistogramMetrics.RoundTrip(r)
 			case IsLabelsQuery(r.URL.Path):
 				return labels.RoundTrip(r)
+			case IsRemoteReadQuery(r.URL.Path):
+				return remoteRead.RoundTrip(r)
 			default:
 				return next.RoundTrip(r)
 			}
@@ -412,6 +419,8 @@ func newQueryCountTripperware(registerer prometheus.Registerer) Tripperware {
 				op = queryTypeActiveNativeHistogramMetrics
 			case IsLabelsQuery(r.URL.Path):
 				op = queryTypeLabels
+			case IsRemoteReadQuery(r.URL.Path):
+				op = queryTypeRemoteRead
 			}
 
 			tenantIDs, err := tenant.TenantIDs(r.Context())
@@ -459,4 +468,8 @@ func IsActiveSeriesQuery(path string) bool {
 
 func IsActiveNativeHistogramMetricsQuery(path string) bool {
 	return strings.HasSuffix(path, cardinalityActiveNativeHistogramMetricsPathSuffix)
+}
+
+func IsRemoteReadQuery(path string) bool {
+	return strings.HasSuffix(path, remoteReadPathSuffix)
 }

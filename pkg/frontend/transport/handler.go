@@ -185,14 +185,22 @@ func (f *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Limit the read body size.
 	r.Body = http.MaxBytesReader(w, r.Body, f.cfg.MaxBodySize)
 
-	params, err := util.ParseRequestFormWithoutConsumingBody(r)
-	if err != nil {
-		writeError(w, apierror.New(apierror.TypeBadData, err.Error()))
-		return
-	}
+	var params url.Values
+	var err error
 
-	activityIndex := f.at.Insert(func() string { return httpRequestActivity(r, r.Header.Get("User-Agent"), params) })
-	defer f.at.Delete(activityIndex)
+	// We cannot get the request parameters in a generic way if the request is in protobuf format.
+	// Thus we cannot start the activity tracker in this case. We'll defer the responsibility to the roundtripper.
+	if r.Header.Get("Content-Type") != "application/x-protobuf" {
+		params, err = util.ParseRequestFormWithoutConsumingBody(r)
+		if err != nil {
+			writeError(w, apierror.New(apierror.TypeBadData, err.Error()))
+			return
+		}
+		activityIndex := f.at.Insert(func() string { return httpRequestActivity(r, r.Header.Get("User-Agent"), params) })
+		defer f.at.Delete(activityIndex)
+	} else {
+		params = url.Values{}
+	}
 
 	if isActiveSeriesEndpoint(r) && f.cfg.ActiveSeriesWriteTimeout > 0 {
 		deadline := time.Now().Add(f.cfg.ActiveSeriesWriteTimeout)
@@ -210,6 +218,14 @@ func (f *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 	resp, err := f.roundTripper.RoundTrip(r)
 	queryResponseTime := time.Since(startTime)
+
+	// For non HTTP parameters, check if the roundtripper has added any details to the context.
+	details := querymiddleware.QueryDetailsFromContext(r.Context())
+	if details != nil {
+		for k, v := range details.Params {
+			params.Set(k, v)
+		}
+	}
 
 	if err != nil {
 		writeError(w, err)

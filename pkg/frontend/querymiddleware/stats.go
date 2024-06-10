@@ -145,6 +145,10 @@ type QueryDetails struct {
 
 	ResultsCacheMissBytes int
 	ResultsCacheHitBytes  int
+
+	// Params are the query params from the request used for logging.
+	// This is useful when the query is in protobuf and the generic HTTP params are not available.
+	Params map[string]string
 }
 
 type contextKey int

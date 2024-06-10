@@ -20,6 +20,7 @@ import (
 
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
+	"github.com/gogo/protobuf/proto"
 	"github.com/grafana/dskit/concurrency"
 	"github.com/grafana/dskit/httpgrpc"
 	"github.com/grafana/dskit/middleware"
@@ -28,6 +29,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	promtest "github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/prometheus/prometheus/prompb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
@@ -61,6 +63,16 @@ func TestWriteError(t *testing.T) {
 	}
 }
 
+type dumbRoundTripper struct {
+}
+
+func (d *dumbRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader("")),
+	}, nil
+}
+
 func TestHandler_ServeHTTP(t *testing.T) {
 	const testRouteName = "the_test_route"
 
@@ -68,6 +80,7 @@ func TestHandler_ServeHTTP(t *testing.T) {
 		name                    string
 		cfg                     HandlerConfig
 		request                 func() *http.Request
+		roundTripperParams      map[string]string
 		expectedParams          url.Values
 		expectedMetrics         int
 		expectedActivity        string
@@ -155,11 +168,49 @@ func TestHandler_ServeHTTP(t *testing.T) {
 			expectedActivity:        "user:12345 UA:test-user-agent req:GET /api/v1/query query=some_metric&time=42",
 			expectedReadConsistency: "",
 		},
+		{
+			name: "handler with stats enabled, serving remote read query",
+			cfg:  HandlerConfig{QueryStatsEnabled: true, MaxBodySize: 1024},
+			request: func() *http.Request {
+				r := httptest.NewRequest("GET", "/api/v1/read", nil)
+				r.Header.Add("User-Agent", "test-user-agent")
+				r.Header.Add("Content-Type", "application/x-protobuf")
+				req := &prompb.ReadRequest{
+					Queries: []*prompb.Query{
+						{
+							Matchers: []*prompb.LabelMatcher{
+								{Name: "__name__", Type: prompb.LabelMatcher_EQ, Value: "some_metric"},
+								{Name: "foo", Type: prompb.LabelMatcher_RE, Value: ".*bar.*"},
+							},
+							StartTimestampMs: 0,
+							EndTimestampMs:   42,
+						},
+					},
+				}
+				data, _ := proto.Marshal(req) // Ignore error, if this fails, the test will fail.
+				r.Body = io.NopCloser(strings.NewReader(string(data)))
+				return r
+			},
+			expectedActivity: "user:12345 UA:test-user-agent req:GET /api/v1/read (no params)", // /api/v1/read matchers={__name__=\"some_metric\",foo=~\".*bar.*\"}&start=0&end=42",
+			expectedMetrics:  5,
+			expectedParams: url.Values{
+				"matchers": []string{"__name__=\"some_metric\",foo=~\".*bar.*\""},
+				"start":    []string{"0"},
+				"end":      []string{"42"},
+			}, // No from parameters as this is a protobuf request.
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			activityFile := filepath.Join(t.TempDir(), "activity-tracker")
 
 			roundTripper := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				dumbRT := &dumbRoundTripper{}
+
+				if req.URL.Path == "/api/v1/read" {
+					remoteRead := querymiddleware.NewRemoteReadRoundTripper(dumbRT, nil)
+					return remoteRead.RoundTrip(req)
+				}
+
 				activities, err := activitytracker.LoadUnfinishedEntries(activityFile)
 				assert.NoError(t, err)
 				assert.Len(t, activities, 1)
@@ -168,10 +219,7 @@ func TestHandler_ServeHTTP(t *testing.T) {
 				assert.NoError(t, req.ParseForm())
 				assert.Equal(t, tt.expectedParams, req.Form)
 
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(strings.NewReader("{}")),
-				}, nil
+				return dumbRT.RoundTrip(req)
 			})
 
 			reg := prometheus.NewPedanticRegistry()
@@ -190,7 +238,7 @@ func TestHandler_ServeHTTP(t *testing.T) {
 
 			handler.ServeHTTP(resp, req)
 			responseData, _ := io.ReadAll(resp.Body)
-			require.Equal(t, resp.Code, http.StatusOK)
+			require.Equal(t, http.StatusOK, resp.Code)
 
 			count, err := promtest.GatherAndCount(
 				reg,
@@ -232,6 +280,11 @@ func TestHandler_ServeHTTP(t *testing.T) {
 				require.EqualValues(t, 0, msg["split_queries"])
 				require.EqualValues(t, 0, msg["estimated_series_count"])
 				require.EqualValues(t, 0, msg["queue_time_seconds"])
+
+				// Check that the HTTP or Protobuf request parameters are logged.
+				for key, value := range tt.expectedParams {
+					require.Equal(t, value[0], msg["param_"+key])
+				}
 
 				if tt.expectedReadConsistency != "" {
 					require.Equal(t, tt.expectedReadConsistency, msg["read_consistency"])
