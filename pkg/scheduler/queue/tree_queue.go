@@ -12,9 +12,9 @@ type QueueIndex int     //nolint:revive // disallows types beginning with packag
 
 const localQueueIndex = -1
 
-// Tree holds metadata and a pointer to the root node of a hierarchical queue implementation.
+// TreeQueue holds metadata and a pointer to the root node of a hierarchical queue implementation.
 // The root Node maintains a localQueue and an arbitrary number of child nodes (which themselves
-// may have local queues and children). Each Node in Tree uses a DequeueAlgorithm (determined by
+// may have local queues and children). Each Node in TreeQueue uses a DequeueAlgorithm (determined by
 // node depth) to determine dequeue order of that Node's subtree.
 //
 // Each queuing dimension is modeled as a node in the tree, internally reachable through a QueuePath.
@@ -24,14 +24,14 @@ const localQueueIndex = -1
 //
 // When dequeuing from a given node, a Node will use its DequeueAlgorithm to choose either itself
 // or a child node to dequeue from recursively (i.e., a child Node will use its own DequeueAlgorithm
-// to determine how to proceed). Tree will not dequeue from two different Nodes at the same depth
+// to determine how to proceed). TreeQueue will not dequeue from two different Nodes at the same depth
 // consecutively, unless the previously-checked Node was empty down to the leaf node.
-type Tree struct {
+type TreeQueue struct {
 	rootNode     *Node
 	algosByDepth []DequeueAlgorithm
 }
 
-func NewTree(dequeueAlgorithms ...DequeueAlgorithm) (*Tree, error) {
+func NewTree(dequeueAlgorithms ...DequeueAlgorithm) (*TreeQueue, error) {
 	if len(dequeueAlgorithms) == 0 {
 		return nil, fmt.Errorf("cannot create a tree without defined dequeueing algorithms")
 	}
@@ -40,17 +40,17 @@ func NewTree(dequeueAlgorithms ...DequeueAlgorithm) (*Tree, error) {
 		return nil, err
 	}
 	root.depth = 0
-	return &Tree{
+	return &TreeQueue{
 		rootNode:     root,
 		algosByDepth: dequeueAlgorithms,
 	}, nil
 }
 
-func (t *Tree) IsEmpty() bool {
+func (t *TreeQueue) IsEmpty() bool {
 	return t.rootNode.IsEmpty()
 }
 
-// Dequeue removes and returns an item from the front of the next appropriate Node in the Tree, as
+// Dequeue removes and returns an item from the front of the next appropriate Node in the TreeQueue, as
 // well as the path to the Node which that item was dequeued from.
 //
 // Either the root/self node or a child node is chosen according to the Node's DequeueAlgorithm. If
@@ -60,7 +60,7 @@ func (t *Tree) IsEmpty() bool {
 // Nodes that empty down to the leaf after being dequeued from (or which are found to be empty leaf
 // nodes during the dequeue operation) are deleted as the recursion returns up the stack. This
 // maintains structural guarantees relied upon to make IsEmpty() non-recursive.
-func (t *Tree) Dequeue() (QueuePath, any) {
+func (t *TreeQueue) Dequeue() (QueuePath, any) {
 	path, v := t.rootNode.dequeue()
 	// The returned node dequeue path includes the root node; exclude
 	// this so that the return path can be used if needed to enqueue.
@@ -72,12 +72,12 @@ func (t *Tree) Dequeue() (QueuePath, any) {
 //
 // path is relative to the root node; providing a QueuePath beginning with "root"
 // will create a child node of the root node which is also named "root."
-func (t *Tree) EnqueueBackByPath(path QueuePath, v any) error {
+func (t *TreeQueue) EnqueueBackByPath(path QueuePath, v any) error {
 	return t.rootNode.enqueueBackByPath(t, path, v)
 }
 
 // EnqueueFrontByPath enqueues an item in the front of the local queue of the Node
-// located at a given path through the Tree; nodes for the path are created as needed.
+// located at a given path through the TreeQueue; nodes for the path are created as needed.
 //
 // Enqueueing to the front is intended only for items which were first enqueued to the back
 // and then dequeued after reaching the front.
@@ -90,11 +90,11 @@ func (t *Tree) EnqueueBackByPath(path QueuePath, v any) error {
 //
 // path must be relative to the root node; providing a QueuePath beginning with "root"
 // will create a child node of root which is also named "root."
-func (t *Tree) EnqueueFrontByPath(path QueuePath, v any) error {
+func (t *TreeQueue) EnqueueFrontByPath(path QueuePath, v any) error {
 	return t.rootNode.enqueueFrontByPath(t, path, v)
 }
 
-func (t *Tree) GetNode(path QueuePath) *Node {
+func (t *TreeQueue) GetNode(path QueuePath) *Node {
 	return t.rootNode.getNode(path)
 }
 
@@ -167,7 +167,7 @@ func (n *Node) getLocalQueue() *list.List {
 	return n.localQueue
 }
 
-func (n *Node) enqueueFrontByPath(tree *Tree, pathFromNode QueuePath, v any) error {
+func (n *Node) enqueueFrontByPath(tree *TreeQueue, pathFromNode QueuePath, v any) error {
 	childNode, err := n.getOrAddNode(pathFromNode, tree)
 	if err != nil {
 		return err
@@ -176,7 +176,7 @@ func (n *Node) enqueueFrontByPath(tree *Tree, pathFromNode QueuePath, v any) err
 	return nil
 }
 
-func (n *Node) enqueueBackByPath(tree *Tree, pathFromNode QueuePath, v any) error {
+func (n *Node) enqueueBackByPath(tree *TreeQueue, pathFromNode QueuePath, v any) error {
 	childNode, err := n.getOrAddNode(pathFromNode, tree)
 	if err != nil {
 		return err
@@ -254,7 +254,7 @@ func (n *Node) getNode(pathFromNode QueuePath) *Node {
 //
 // pathFromNode must be relative to the receiver node; providing a QueuePath beginning with
 // the receiver/parent node name will create a child node of the same name as the parent.
-func (n *Node) getOrAddNode(pathFromNode QueuePath, tree *Tree) (*Node, error) {
+func (n *Node) getOrAddNode(pathFromNode QueuePath, tree *TreeQueue) (*Node, error) {
 	if len(pathFromNode) == 0 {
 		return n, nil
 	}
