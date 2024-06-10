@@ -75,8 +75,8 @@ The following features are currently experimental:
     - `-distributor.max-request-pool-buffer-size`
   - Enable direct translation from OTLP write requests to Mimir equivalents
     - `-distributor.direct-otlp-translation-enabled`
-  - Add support for promoting otel resource attributes
-    - `limits.promote_otel_resource_attributes`
+  - Promte a certain set of OTel resource attributes to labels
+    - `-distributor.promote-otel-resource-attributes`
 - Hash ring
   - Disabling ring heartbeat timeouts
     - `-distributor.ring.heartbeat-timeout=0`
