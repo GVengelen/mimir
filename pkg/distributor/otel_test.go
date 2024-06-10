@@ -6,26 +6,207 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"testing"
 	"time"
 
 	"github.com/go-kit/log"
 	"github.com/grafana/dskit/user"
-	"github.com/grafana/mimir/pkg/mimirpb"
-	"github.com/grafana/mimir/pkg/util/test"
-	"github.com/grafana/mimir/pkg/util/validation"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/prompb"
 	"github.com/prometheus/prometheus/storage/remote"
+	prometheustranslator "github.com/prometheus/prometheus/storage/remote/otlptranslator/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/pmetric/pmetricotlp"
+
+	"github.com/grafana/mimir/pkg/distributor/otlp"
+	"github.com/grafana/mimir/pkg/mimirpb"
+	"github.com/grafana/mimir/pkg/util/test"
+	"github.com/grafana/mimir/pkg/util/validation"
 )
+
+func TestOTelMetricsToTimeSeries(t *testing.T) {
+	const tenantID = "testTenant"
+	discardedDueToOTelParseError := promauto.With(nil).NewCounterVec(prometheus.CounterOpts{
+		Name: "discarded_due_to_otel_parse_error",
+		Help: "Number of metrics discarded due to OTLP parse errors.",
+	}, []string{tenantID, "group"})
+	resourceAttrs := map[string]string{
+		"service.name":        "service name",
+		"service.instance.id": "service ID",
+		"existent-attr":       "resource value",
+		// This one is for testing conflict with metric attribute.
+		"metric-attr": "resource value",
+		// This one is for testing conflict with auto-generated job attribute.
+		"job": "resource value",
+		// This one is for testing conflict with auto-generated instance attribute.
+		"instance": "resource value",
+	}
+	expTargetInfoLabels := []mimirpb.LabelAdapter{
+		{
+			Name:  labels.MetricName,
+			Value: "target_info",
+		},
+	}
+	for k, v := range resourceAttrs {
+		switch k {
+		case "service.name":
+			k = "job"
+		case "service.instance.id":
+			k = "instance"
+		case "job", "instance":
+			// Ignore, as these labels are generated from service.name and service.instance.id
+			continue
+		default:
+			k = prometheustranslator.NormalizeLabel(k)
+		}
+		expTargetInfoLabels = append(expTargetInfoLabels, mimirpb.LabelAdapter{
+			Name:  k,
+			Value: v,
+		})
+	}
+	sort.Stable(otlp.ByLabelName(expTargetInfoLabels))
+
+	md := pmetric.NewMetrics()
+	{
+		rm := md.ResourceMetrics().AppendEmpty()
+		for k, v := range resourceAttrs {
+			rm.Resource().Attributes().PutStr(k, v)
+		}
+		il := rm.ScopeMetrics().AppendEmpty()
+		m := il.Metrics().AppendEmpty()
+		m.SetName("test_metric")
+		dp := m.SetEmptyGauge().DataPoints().AppendEmpty()
+		dp.SetIntValue(123)
+		dp.SetTimestamp(pcommon.NewTimestampFromTime(time.Now()))
+		dp.Attributes().PutStr("metric-attr", "metric value")
+	}
+
+	testCases := []struct {
+		name                      string
+		expectedLabels            []mimirpb.LabelAdapter
+		promoteResourceAttributes []string
+	}{
+		{
+			name:                      "Successful conversion without resource attribute promotion",
+			promoteResourceAttributes: nil,
+			expectedLabels: []mimirpb.LabelAdapter{
+				{
+					Name:  "__name__",
+					Value: "test_metric",
+				},
+				{
+					Name:  "instance",
+					Value: "service ID",
+				},
+				{
+					Name:  "job",
+					Value: "service name",
+				},
+				{
+					Name:  "metric_attr",
+					Value: "metric value",
+				},
+			},
+		},
+		{
+			name:                      "Successful conversion with resource attribute promotion",
+			promoteResourceAttributes: []string{"non-existent-attr", "existent-attr"},
+			expectedLabels: []mimirpb.LabelAdapter{
+				{
+					Name:  "__name__",
+					Value: "test_metric",
+				},
+				{
+					Name:  "instance",
+					Value: "service ID",
+				},
+				{
+					Name:  "job",
+					Value: "service name",
+				},
+				{
+					Name:  "metric_attr",
+					Value: "metric value",
+				},
+				{
+					Name:  "existent_attr",
+					Value: "resource value",
+				},
+			},
+		},
+		{
+			name:                      "Successful conversion with resource attribute promotion, conflicting resource attributes are ignored",
+			promoteResourceAttributes: []string{"non-existent-attr", "existent-attr", "metric-attr", "job", "instance"},
+			expectedLabels: []mimirpb.LabelAdapter{
+				{
+					Name:  "__name__",
+					Value: "test_metric",
+				},
+				{
+					Name:  "instance",
+					Value: "service ID",
+				},
+				{
+					Name:  "job",
+					Value: "service name",
+				},
+				{
+					Name:  "existent_attr",
+					Value: "resource value",
+				},
+				{
+					Name:  "metric_attr",
+					Value: "metric value",
+				},
+			},
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, testOld := range []bool{false, true} {
+				t.Run(fmt.Sprintf("old function=%t", testOld), func(t *testing.T) {
+					functionUnderTest := otelMetricsToTimeseries
+					if testOld {
+						functionUnderTest = otelMetricsToTimeseriesOld
+					}
+					mimirTS, err := functionUnderTest(
+						tenantID, true, tc.promoteResourceAttributes, discardedDueToOTelParseError, log.NewNopLogger(), md,
+					)
+					require.NoError(t, err)
+					require.Len(t, mimirTS, 2)
+					var ts mimirpb.PreallocTimeseries
+					var targetInfo mimirpb.PreallocTimeseries
+					for i := range mimirTS {
+						for _, lbl := range mimirTS[i].Labels {
+							if lbl.Name != labels.MetricName {
+								continue
+							}
+
+							if lbl.Value == "target_info" {
+								targetInfo = mimirTS[i]
+							} else {
+								ts = mimirTS[i]
+							}
+						}
+					}
+
+					assert.ElementsMatch(t, ts.Labels, tc.expectedLabels)
+					assert.ElementsMatch(t, targetInfo.Labels, expTargetInfoLabels)
+				})
+			}
+		})
+	}
+}
 
 func BenchmarkOTLPHandler(b *testing.B) {
 	var samples []prompb.Sample
@@ -166,97 +347,3 @@ func (r *reusableReader) Reset() {
 }
 
 var _ io.ReadCloser = &reusableReader{}
-
-func TestOtlpToTimeseriesWithBlessingAttributes(t *testing.T) {
-	tenantID := "testTenant"
-	discardedDueToOtelParseError := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "discarded_due_to_otel_parse_error",
-		Help: "Number of metrics discarded due to OTLP parse errors.",
-	}, []string{tenantID, "group"})
-
-	// Helper function to create a pmetric.Metrics object
-	createMetrics := func() pmetric.Metrics {
-		md := pmetric.NewMetrics()
-		rm := md.ResourceMetrics().AppendEmpty()
-		rm.Resource().Attributes().PutStr("attr2", "value2")
-		il := rm.ScopeMetrics().AppendEmpty()
-		m := il.Metrics().AppendEmpty()
-		m.SetName("test_metric")
-		dp := m.SetEmptyGauge().DataPoints().AppendEmpty()
-		dp.SetIntValue(123)
-		dp.SetTimestamp(pcommon.NewTimestampFromTime(time.Now()))
-		return md
-	}
-	testCases := []struct {
-		name                        string
-		expectedLabels              []mimirpb.LabelAdapter
-		otelMetricsToTimeseriesFunc func(_ string, _ bool, _ []string, _ *prometheus.CounterVec, _ log.Logger, _ pmetric.Metrics) ([]mimirpb.PreallocTimeseries, error)
-		promoteResourceAttributes   []string
-	}{
-		{
-			name: "Successful conversion without blessing attributes new",
-			expectedLabels: []mimirpb.LabelAdapter{
-				{
-					Name:  "__name__",
-					Value: "test_metric",
-				},
-			},
-			otelMetricsToTimeseriesFunc: otelMetricsToTimeseries,
-			promoteResourceAttributes:   []string{},
-		},
-		{
-			name: "Successful conversion with blessing attributes new",
-			expectedLabels: []mimirpb.LabelAdapter{
-				{
-					Name:  "__name__",
-					Value: "test_metric",
-				},
-				{
-					Name:  "attr2",
-					Value: "value2",
-				},
-			},
-			otelMetricsToTimeseriesFunc: otelMetricsToTimeseries,
-			promoteResourceAttributes:   []string{"attr1", "attr2"},
-		},
-		{
-			name: "Successful conversion without blessing attributes old",
-			expectedLabels: []mimirpb.LabelAdapter{
-				{
-					Name:  "__name__",
-					Value: "test_metric",
-				},
-			},
-			otelMetricsToTimeseriesFunc: otelMetricsToTimeseriesOld,
-			promoteResourceAttributes:   []string{},
-		},
-		{
-			name: "Successful conversion with blessing attributes old",
-			expectedLabels: []mimirpb.LabelAdapter{
-				{
-					Name:  "__name__",
-					Value: "test_metric",
-				},
-				{
-					Name:  "attr2",
-					Value: "value2",
-				},
-			},
-			otelMetricsToTimeseriesFunc: otelMetricsToTimeseriesOld,
-			promoteResourceAttributes:   []string{"attr1", "attr2"},
-		},
-	}
-
-	md := createMetrics()
-	for _, ts := range testCases {
-		t.Run(ts.name, func(t *testing.T) {
-			mimirTS, err := ts.otelMetricsToTimeseriesFunc(tenantID, true, ts.promoteResourceAttributes, discardedDueToOtelParseError, log.NewNopLogger(), md)
-			assert.NoError(t, err)
-			assert.Equal(t, 1, len(mimirTS))
-			assert.Equal(t, len(ts.expectedLabels), len(mimirTS[0].Labels))
-			for i, l := range ts.expectedLabels {
-				assert.Equal(t, 0, l.Compare(mimirTS[0].Labels[i]))
-			}
-		})
-	}
-}
